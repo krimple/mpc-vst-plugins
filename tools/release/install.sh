@@ -11,6 +11,16 @@ cd "$(dirname "$0")"
 NAME='@NAME@'; SO='@SO_NAME@'; SKIN='@SKIN@'; UID_HEX='@UID@'; LEGACY_SO='@LEGACY_SO@'; USER_DATA='@USER_DATA@'; EXTRAS='@EXTRAS@'; RETIRE='@RETIRE@'; PLUGIN_ID='@ID@'
 SYNTHS=/sdcard/Synths; YES=0; DEFER=0; TSET=0
 die() { echo "error: $*" >&2; exit 1; }
+# copy_a: cp -a without the "can't preserve ownership" lines an exFAT/FAT drive causes for every file (it has no owners;
+# device, MPC Key 61 external SSD, 2026-11-26). Any other error is still shown and still fails the copy.
+copy_a() {
+    _e=$(mktemp 2>/dev/null || echo "/tmp/.copy_a.$$")
+    if cp -a "$@" 2>"$_e"; then _rc=0; else _rc=$?; fi
+    _rest=$(grep -v -e "preserve ownership" "$_e" || true)
+    rm -f "$_e"
+    [ -z "$_rest" ] || printf '%s\n' "$_rest" >&2
+    [ "$_rc" = 0 ] || [ -z "$_rest" ]
+}
 while [ $# -gt 0 ]; do
     case "$1" in
         -y) YES=1; shift ;;
@@ -163,7 +173,7 @@ fi
 # 1. the folder: staged next to the target, the user's own files carried over, then swapped in
 NEW="$SYNTHS/$SKIN"; STAGE="$SYNTHS/.$SKIN.new"; OLD="$SYNTHS/.$SKIN.old"
 rm -rf "$STAGE" "$OLD"
-cp -a "portable/$SKIN" "$STAGE"
+copy_a "portable/$SKIN" "$STAGE"
 SYNTHS_SED=$(printf '%s' "$SYNTHS" | sed 's/[|&\\]/\\&/g')   # the folder as a sed replacement (| & \ escaped)
 for f in "$STAGE"/Presets/*.xpl; do   # shipped presets name the plugin with the same placeholder as plugin-meta.xml
     [ -f "$f" ] || continue
@@ -181,9 +191,9 @@ if [ -f MODES ]; then   # a zip unpacked on Windows or copied file by file loses
 fi
 for d in $USER_DATA; do
     if [ -e "$NEW/$d" ]; then          # an earlier install of this layout: its files win over the shipped ones
-        rm -rf "$STAGE/$d"; mkdir -p "$(dirname "$STAGE/$d")"; cp -a "$NEW/$d" "$STAGE/$d"
+        rm -rf "$STAGE/$d"; mkdir -p "$(dirname "$STAGE/$d")"; copy_a "$NEW/$d" "$STAGE/$d"
     elif [ $LEGACY = 1 ] && [ -d "$OLDROOT/$d" ]; then   # the old layout: merged over what the package ships
-        mkdir -p "$STAGE/$d"; cp -a "$OLDROOT/$d/." "$STAGE/$d/"; MIGRATED="$MIGRATED $d"
+        mkdir -p "$STAGE/$d"; copy_a "$OLDROOT/$d/." "$STAGE/$d/"; MIGRATED="$MIGRATED $d"
     fi
 done
 if [ -e "$NEW" ]; then mv "$NEW" "$OLD"; fi
@@ -251,7 +261,7 @@ if [ -n "$RETIRE" ]; then
         if grep -q "\"id\": *\"$PLUGIN_ID\"" "$o/mpc-plugin.json" 2>/dev/null; then
             for d in $USER_DATA; do
                 if [ -e "$o/$d" ] && [ ! -e "$NEW/$d" ]; then
-                    mkdir -p "$(dirname "$NEW/$d")" && cp -a "$o/$d" "$NEW/$d" || die "could not move your files from $r/$d; the old folder was kept"
+                    mkdir -p "$(dirname "$NEW/$d")" && copy_a "$o/$d" "$NEW/$d" || die "could not move your files from $r/$d; the old folder was kept"
                     echo "moved your files from $r/$d into $SYNTHS/$SKIN"
                 fi
             done

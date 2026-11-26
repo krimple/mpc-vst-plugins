@@ -2951,6 +2951,30 @@ class InstallerTest(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("noexec", r.stdout)
 
+    def fake_cp(self, line, rc):
+        """A cp that copies, then (for cp -a) complains with `line` and exits `rc` (an exFAT drive's ownership noise, or a real error)."""
+        d = os.path.join(self.tmp, "fakebin")
+        os.makedirs(d, exist_ok=True)
+        real = shutil.which("cp")
+        with open(os.path.join(d, "cp"), "w") as f:
+            # only cp -a preserves ownership: a plain cp (the MPC.settings backup) copies quietly, as on the device
+            f.write("#!/bin/sh\n%s \"$@\" || exit $?\n[ \"$1\" = -a ] || exit 0\necho \"%s\" >&2\nexit %d\n" % (real, line, rc))
+        os.chmod(os.path.join(d, "cp"), 0o755)
+        return d + os.pathsep + (os.environ.get("INSTALLER_TEST_PATH") or os.environ["PATH"])
+
+    def test_copy_hides_exfat_ownership_noise_but_not_real_errors(self):
+        env, ext_vst2, _ = self.external_drive()
+        for rc in (0, 1):   # BusyBox carries on (0); GNU cp exits 1 for the same complaint
+            path = self.fake_cp("cp: can't preserve ownership of 'x': Operation not permitted", rc)
+            r = self.run_without_t("install.sh", env, path=path)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("preserve ownership", r.stderr)
+            self.assertTrue(os.path.isfile(os.path.join(ext_vst2, self.SKIN, "test_synth.so")))
+        path = self.fake_cp("cp: write error: No space left on device", 1)
+        r = self.run_without_t("install.sh", env, path=path)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("No space left on device", r.stderr)
+
     def test_uninstall_finds_a_copy_on_an_external_drive(self):
         env, ext_vst2, _ = self.external_drive()
         self.assertEqual(self.run_without_t("install.sh", env).returncode, 0)
